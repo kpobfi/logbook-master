@@ -1,0 +1,83 @@
+const sheetName = 'Sheet1';
+const empDBSheetName = 'empDB';
+const scriptProp = PropertiesService.getScriptProperties();
+
+function initialSetup() {
+  const activeSpreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  scriptProp.setProperty('key', activeSpreadsheet.getId());
+}
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.tryLock(10000);
+
+  try {
+    const doc = SpreadsheetApp.openById(scriptProp.getProperty('key'));
+    const sheet = doc.getSheetByName(sheetName);
+    const empDBSheet = doc.getSheetByName(empDBSheetName);
+    const employeeID = e.parameter['Employee ID'];
+    const currentDate = new Date();
+    const formattedDate = Utilities.formatDate(currentDate, Session.getScriptTimeZone(), 'MM/dd/yyyy');
+    
+    const empDBValues = empDBSheet.getDataRange().getValues();
+    const empExists = empDBValues.some(row => row[0] == employeeID);
+
+    if (!empExists) {
+      return ContentService.createTextOutput(JSON.stringify({ 'result': 'error', 'message': 'Employee does not exist' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const logbookValues = sheet.getDataRange().getValues();
+    let timeInExists = false;
+    let timeOutExists = false;
+    let lastTimeInDate = null;
+
+    for (let i = logbookValues.length - 1; i >= 0; i--) {
+      if (logbookValues[i][0] == employeeID && Utilities.formatDate(new Date(logbookValues[i][1]), Session.getScriptTimeZone(), 'MM/dd/yyyy') == formattedDate) {
+        if (logbookValues[i][2] == 'Time In') {
+          timeInExists = true;
+          lastTimeInDate = new Date(logbookValues[i][1]);
+        } else if (logbookValues[i][2] == 'Time Out') {
+          timeOutExists = true;
+        }
+        if (timeInExists && timeOutExists) {
+          break;
+        }
+      }
+    }
+
+    if (timeInExists && timeOutExists) {
+      return ContentService.createTextOutput(JSON.stringify({ 'result': 'error', 'message': 'Log already exists for today' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } else if (timeInExists) {
+      const timeDifference = (currentDate - lastTimeInDate) / (1000 * 60); // Difference in minutes
+
+      if (timeDifference < 2) {
+        return ContentService.createTextOutput(JSON.stringify({ 'result': 'error', 'message': 'Duplicated Scan' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      // Insert Time Out
+      const nextRow = sheet.getLastRow() + 1;
+      sheet.getRange(nextRow, 1).setValue(employeeID);
+      sheet.getRange(nextRow, 2).setValue(currentDate);
+      sheet.getRange(nextRow, 3).setValue('Time Out');
+      return ContentService.createTextOutput(JSON.stringify({ 'result': 'success', 'message': 'Time Out recorded' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } else {
+      // Insert Time In
+      const nextRow = sheet.getLastRow() + 1;
+      sheet.getRange(nextRow, 1).setValue(employeeID);
+      sheet.getRange(nextRow, 2).setValue(currentDate);
+      sheet.getRange(nextRow, 3).setValue('Time In');
+      return ContentService.createTextOutput(JSON.stringify({ 'result': 'success', 'message': 'Time In recorded' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ 'result': 'error', 'message': error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
+}
